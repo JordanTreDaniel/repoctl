@@ -1,0 +1,70 @@
+# .repoctl.example.yaml — annotated example config for a multi-repo full-stack app
+#
+# Copy this to .repoctl.yaml at your project root and fill in your values.
+# Run 'repoctl validate' to check your config before using it.
+
+# Project identity
+name: my-project
+description: Full-stack app with API, frontend, and chat UI
+
+# Port assignment strategy
+# Each environment gets its own block: base + (env_index * stride) + service_offset
+#
+# Example with base=3000, stride=100:
+#   env 0 (main):         api=3000  app=3001  chat=3002
+#   env 1 (feature-auth): api=3100  app=3101  chat=3102
+#   env 2 (v3-dates):     api=3200  app=3201  chat=3202
+port_strategy:
+  base: 3000
+  stride: 100
+
+# Services — one entry per repo
+services:
+  - name: api
+    repo: backend/my-api          # path relative to this file's directory
+    port_offset: 0                # added to (base + stride * env_index)
+    start: npm run start:dev
+    env_file: .env                # defaults to .env if omitted
+
+  - name: app
+    repo: frontend/my-app
+    port_offset: 1
+    start: npm run dev
+    env_file: .env
+
+  - name: chat
+    repo: chat-ui
+    port_offset: 2
+    start: npm run dev
+    env_file: .env
+
+# Cross-service URL rewrites
+# When an environment is created, these env vars are patched with the correct ports.
+# Template tokens: {service-name.port}
+port_rewrites:
+  - service: app
+    env_var: NEXT_PUBLIC_API_URL
+    template: "http://localhost:{api.port}"
+
+  - service: app
+    env_var: NEXT_PUBLIC_APP_URL
+    template: "http://localhost:{app.port}"
+
+  - service: chat
+    env_var: NEXT_PUBLIC_BACKEND_URL
+    template: "http://localhost:{api.port}"
+
+# SQLite database isolation (optional — remove this section if not using SQLite)
+# Each environment gets its own copy of the DB file so they never share state.
+database:
+  type: sqlite
+  service: api                    # which service repo contains the DB file
+  env_var: DATABASE_FILE          # env var in the service's .env that points to the file
+  base_file: dev.sqlite           # file to copy when creating a new environment
+  seed_command: npm run seed      # optional: run after copying (for empty DB initialization)
+
+# Gitignored files to copy from the base repo into each new worktree
+# Useful for .env files that exist in the main checkout but aren't committed
+worktree_copy:
+  - .env
+  - .env.local
