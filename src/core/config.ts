@@ -46,9 +46,7 @@ function validateConfig(config: RepoctlConfig, filePath: string): void {
   const rootDir = path.dirname(filePath);
 
   if (!config.name) errors.push('Missing required field: name');
-  if (!config.port_strategy) errors.push('Missing required field: port_strategy');
-  if (!config.port_strategy?.base) errors.push('Missing required field: port_strategy.base');
-  if (!config.port_strategy?.stride) errors.push('Missing required field: port_strategy.stride');
+  if (config.env_offset == null) errors.push('Missing required field: env_offset');
   if (!config.services || config.services.length === 0) {
     errors.push('Must define at least one service');
   }
@@ -56,7 +54,7 @@ function validateConfig(config: RepoctlConfig, filePath: string): void {
   for (const svc of config.services ?? []) {
     if (!svc.name) errors.push('A service is missing its name');
     if (!svc.repo) errors.push(`Service '${svc.name}' is missing its repo path`);
-    if (svc.port_offset == null) errors.push(`Service '${svc.name}' is missing port_offset`);
+    if (svc.port == null) errors.push(`Service '${svc.name}' is missing port`);
     if (!svc.start) errors.push(`Service '${svc.name}' is missing start command`);
 
     const repoPath = path.join(rootDir, svc.repo);

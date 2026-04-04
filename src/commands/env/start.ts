@@ -76,6 +76,11 @@ export async function startEnv(envName: string, opts: StartOptions): Promise<voi
       continue;
     }
 
+    if (svc.start === null) {
+      console.log(chalk.dim(`  ○ ${svc.name}: no start command — skipped`));
+      continue;
+    }
+
     spawnService(
       svc.name,
       svc.start,

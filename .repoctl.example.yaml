@@ -7,34 +7,27 @@
 name: my-project
 description: Full-stack app with API, frontend, and chat UI
 
-# Port assignment strategy
-# Each environment gets its own block: base + (env_index * stride) + service_offset
-#
-# Example with base=3000, stride=100:
-#   env 0 (main):         api=3000  app=3001  chat=3002
-#   env 1 (feature-auth): api=3100  app=3101  chat=3102
-#   env 2 (v3-dates):     api=3200  app=3201  chat=3202
-port_strategy:
-  base: 3000
-  stride: 100
+# Worktree offset: added to all base ports for each new environment
+# Example: base ports 3000, 3001, 3002 → env 0: 3000, 3001, 3002 → env 1: 3010, 3011, 3012
+env_offset: 10
 
 # Services — one entry per repo
 services:
   - name: api
     repo: backend/my-api          # path relative to this file's directory
-    port_offset: 0                # added to (base + stride * env_index)
+    port: 3000                    # the port this service runs on
     start: npm run start:dev
     env_file: .env                # defaults to .env if omitted
 
   - name: app
     repo: frontend/my-app
-    port_offset: 1
+    port: 3001
     start: npm run dev
     env_file: .env
 
   - name: chat
     repo: chat-ui
-    port_offset: 2
+    port: 3002
     start: npm run dev
     env_file: .env
 

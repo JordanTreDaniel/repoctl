@@ -8,50 +8,97 @@ import type { RepoctlConfig, ServiceConfig } from '../core/types.js';
 
 const K_CONFIG_FILENAME = '.repoctl.yaml';
 
-// WHAT: scans a directory for sub-directories that contain a package.json or .git
-// WHY:  auto-detects likely service repos to pre-fill the services list during init
-// EDGE: only looks one level deep; nested multi-level repo structures won't be detected
-function detectServiceDirs(baseDir: string): string[] {
+const K_SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', '.next', '.turbo',
+  '.cache', 'coverage', '.repoctl', '.repoctl-worktrees',
+]);
+
+// WHAT: recursively finds all git repos under a base directory
+// WHY:  init needs to discover all repos in a multi-repo project without manual input
+// EDGE: skips common noise dirs (node_modules, dist, etc.) but won't parse .gitignore
+function findGitRepos(baseDir: string, currentDir: string = baseDir, depth: number = 0): string[] {
+  if (depth > 4) return [];
   const results: string[] = [];
+  let entries: fs.Dirent[];
   try {
-    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const dirPath = path.join(baseDir, entry.name);
-      if (
-        fs.existsSync(path.join(dirPath, 'package.json')) ||
-        fs.existsSync(path.join(dirPath, '.git'))
-      ) {
-        results.push(entry.name);
-      }
-      // also check one level deeper (for front-back/medallion-api style layouts)
-      try {
-        const subEntries = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const sub of subEntries) {
-          if (!sub.isDirectory()) continue;
-          const subPath = path.join(dirPath, sub.name);
-          if (
-            fs.existsSync(path.join(subPath, 'package.json')) ||
-            fs.existsSync(path.join(subPath, '.git'))
-          ) {
-            results.push(`${entry.name}/${sub.name}`);
-          }
-        }
-      } catch {
-        // ignore unreadable sub-dirs
-      }
-    }
+    entries = fs.readdirSync(currentDir, { withFileTypes: true });
   } catch {
-    // ignore unreadable dirs
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (K_SKIP_DIRS.has(entry.name)) continue;
+
+    const dirPath = path.join(currentDir, entry.name);
+    const relPath = path.relative(baseDir, dirPath);
+
+    if (fs.existsSync(path.join(dirPath, '.git'))) {
+      results.push(relPath);
+      // don't recurse inside a git repo
+    } else {
+      results.push(...findGitRepos(baseDir, dirPath, depth + 1));
+    }
   }
   return results;
+}
+
+interface PackageJson {
+  scripts?: Record<string, string>;
+}
+
+// WHAT: extracts port from a script command string if present (--port, -p)
+// WHY:  many dev scripts embed the port directly, e.g., "next dev --port 3001"
+function extractPortFromScript(scriptValue: string): number | null {
+  const portMatch = scriptValue.match(/(?:^|\s)--port[=\s]+(\d+)|(?:^|\s)-p[=\s]+(\d+)/);
+  if (portMatch) {
+    return parseInt(portMatch[1] || portMatch[2], 10);
+  }
+  return null;
+}
+
+// WHAT: scans package.json for start commands and port, preferring "dev" then "start"
+// WHY:  reduces manual input — user just confirms the auto-detected command and port
+function findStartCommandAndPort(repoDir: string): { start: string | null; port: number | null } {
+  const pkgPath = path.join(repoDir, 'package.json');
+  if (!fs.existsSync(pkgPath)) return { start: null, port: null };
+
+  let pkg: PackageJson;
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  } catch {
+    return { start: null, port: null };
+  }
+
+  const scripts = pkg.scripts;
+  if (!scripts) return { start: null, port: null };
+
+  // First, look for a script with "dev" in the key (case-insensitive)
+  const devKeys = Object.keys(scripts).filter((k) => k.toLowerCase().includes('dev'));
+  if (devKeys.length > 0) {
+    const key = devKeys[0];
+    const value = scripts[key];
+    const port = extractPortFromScript(value);
+    return { start: `npm run ${key}`, port };
+  }
+
+  // Otherwise, look for a script with "start" in the key
+  const startKeys = Object.keys(scripts).filter((k) => k.toLowerCase().includes('start'));
+  if (startKeys.length > 0) {
+    const key = startKeys[0];
+    const value = scripts[key];
+    const port = extractPortFromScript(value);
+    return { start: `npm run ${key}`, port };
+  }
+
+  return { start: null, port: null };
 }
 
 // WHAT: runs the interactive init wizard and writes .repoctl.yaml to the current directory
 // WHY:  new projects need a guided setup — raw YAML editing is error-prone
 // EDGE: if .repoctl.yaml already exists, prompts to overwrite rather than silently replacing it
 export async function initProject(): Promise<void> {
-  const { input, confirm, number, select } = await import('@inquirer/prompts');
+  const { input, confirm, number, select, checkbox } = await import('@inquirer/prompts');
   const cwd = process.cwd();
   const configPath = path.join(cwd, K_CONFIG_FILENAME);
 
@@ -69,7 +116,7 @@ export async function initProject(): Promise<void> {
   console.log(chalk.bold('\n  repoctl init\n'));
   console.log(chalk.dim('  This will create a .repoctl.yaml config file in the current directory.\n'));
 
-  const detectedDirs = detectServiceDirs(cwd);
+  const detectedDirs = findGitRepos(cwd);
 
   const projectName = await input({
     message: 'Project name:',
@@ -79,56 +126,82 @@ export async function initProject(): Promise<void> {
 
   const description = await input({ message: 'Description (optional):' });
 
-  const portBase = await number({
-    message: 'Base port (first service of env 0):',
-    default: 3000,
-  });
-
-  const portStride = await number({
-    message: 'Port stride (gap between environments):',
-    default: 100,
-  });
-
-  const serviceCount = await number({
-    message: 'How many services (repos)?',
-    default: detectedDirs.length || 1,
-    validate: (v) => (v != null && v > 0) || 'Must have at least one service',
-  });
-
-  const services: ServiceConfig[] = [];
-  const count = serviceCount ?? 1;
-
-  for (let i = 0; i < count; i++) {
-    console.log(chalk.dim(`\n  Service ${i + 1} of ${count}:`));
-
-    const suggestedRepo = detectedDirs[i] ?? '';
-
-    const name = await input({
-      message: '  Name:',
-      default: suggestedRepo ? path.basename(suggestedRepo) : `service-${i}`,
-      validate: (v) => v.trim().length > 0 || 'Name is required',
+  // Let the user select which repos to include via checkboxes
+  let selectedRepos: string[];
+  if (detectedDirs.length > 0) {
+    selectedRepos = await checkbox({
+      message: 'Select repos to include as services:',
+      choices: detectedDirs.map((d) => ({ name: d, value: d, checked: true })),
+      validate: (v) => v.length > 0 || 'Select at least one repo',
     });
-
-    const repo = await input({
-      message: '  Repo path (relative to project root):',
-      default: suggestedRepo,
+  } else {
+    console.log(chalk.yellow('  No git repos found. You can add service paths manually.\n'));
+    const manualRepo = await input({
+      message: 'Repo path (relative to project root):',
       validate: (v) => {
-        if (!v.trim()) return 'Repo path is required';
+        if (!v.trim()) return 'Required';
         if (!fs.existsSync(path.join(cwd, v.trim()))) return `Path does not exist: ${v.trim()}`;
         return true;
       },
     });
+    selectedRepos = [manualRepo];
+  }
 
-    const startCmd = await input({
-      message: '  Start command:',
-      default: 'npm run dev',
-      validate: (v) => v.trim().length > 0 || 'Start command is required',
+  console.log(chalk.dim('\n  Port configuration:'));
+  console.log(chalk.dim('  Base ports: each service gets a base port (e.g., 3000, 3001, 3002)\n'));
+  console.log(chalk.dim('  Worktree offset: each new environment adds this to all ports\n'));
+
+  const envOffset = await number({
+    message: '  Worktree port offset:',
+    default: 10,
+  });
+
+  const services: ServiceConfig[] = [];
+
+  for (let i = 0; i < selectedRepos.length; i++) {
+    const repoPath = selectedRepos[i];
+    const fullPath = path.join(cwd, repoPath);
+    console.log(chalk.dim(`\n  Configure: ${chalk.white(repoPath)}`));
+
+    const { start: detectedStart, port: detectedPort } = findStartCommandAndPort(fullPath);
+
+    const name = await input({
+      message: '    Service name:',
+      default: path.basename(repoPath),
+      validate: (v) => v.trim().length > 0 || 'Name is required',
     });
 
-    const envFile = await input({ message: '  .env file name:', default: '.env' });
+    const hasStart = await confirm({
+      message: '    Does this service have a start command?',
+      default: !!detectedStart,
+    });
 
-    services.push({ name, repo, port_offset: i, start: startCmd, env_file: envFile });
+    let startCmd: string | null = null;
+    if (hasStart) {
+      startCmd = await input({
+        message: '    Start command:',
+        default: detectedStart ?? 'npm run dev',
+        validate: (v) => v.trim().length > 0 || 'Start command is required',
+      });
+    }
+
+    const port = await number({
+      message: '    Base port:',
+      default: detectedPort ?? (3000 + i),
+    });
+
+    const envFile = await input({ message: '    .env file name:', default: '.env' });
+
+    services.push({
+      name,
+      repo: repoPath,
+      port,
+      start: startCmd,
+      env_file: envFile,
+    });
   }
+
+  console.log();
 
   const hasDb = await confirm({
     message: 'Does this project use an SQLite database?',
@@ -176,7 +249,7 @@ export async function initProject(): Promise<void> {
   const config: RepoctlConfig = {
     name: projectName,
     ...(description ? { description } : {}),
-    port_strategy: { base: portBase ?? 3000, stride: portStride ?? 100 },
+    env_offset: envOffset,
     services,
     ...(dbConfig ? { database: dbConfig } : {}),
     worktree_copy: worktreeCopy,

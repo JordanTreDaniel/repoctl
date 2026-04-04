@@ -14,16 +14,15 @@ export function nextEnvIndex(rootDir: string): number {
   return max + 1;
 }
 
-// WHAT: computes the port for a service given its config and env index
-// WHY:  port assignment is base + (index * stride) + offset, deterministic from config
-// EDGE: if stride is too small, services from different envs may collide — validate on init
+// WHAT: returns the port for a service given its config and env index
+// WHY:  port = base port + (env_index * env_offset)
 export function computePort(config: RepoctlConfig, svc: ServiceConfig, envIndex: number): number {
-  return config.port_strategy.base + envIndex * config.port_strategy.stride + svc.port_offset;
+  const offset = config.env_offset ?? 10;
+  return svc.port + envIndex * offset;
 }
 
 // WHAT: builds a map of service name to port for a given env index
 // WHY:  callers need all ports at once for .env patching and display
-// EDGE: returns all services, including ones that may share the same port_offset (misconfiguration)
 export function computePortMap(
   config: RepoctlConfig,
   envIndex: number

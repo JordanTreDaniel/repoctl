@@ -3,14 +3,9 @@
 export interface ServiceConfig {
   name: string;
   repo: string;
-  port_offset: number;
-  start: string;
+  port: number;
+  start: string | null;
   env_file?: string;
-}
-
-export interface PortStrategy {
-  base: number;
-  stride: number;
 }
 
 export interface PortRewrite {
@@ -30,7 +25,7 @@ export interface DatabaseConfig {
 export interface RepoctlConfig {
   name: string;
   description?: string;
-  port_strategy: PortStrategy;
+  env_offset: number;
   services: ServiceConfig[];
   port_rewrites?: PortRewrite[];
   database?: DatabaseConfig;
