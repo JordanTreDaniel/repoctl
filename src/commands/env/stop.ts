@@ -13,12 +13,12 @@ export interface StopOptions {
 // WHAT: kills a process by PID and removes its PID file
 // WHY:  stop command must terminate the spawned service process cleanly
 // EDGE: SIGTERM is sent first; if the process has already exited, the kill call throws and is caught
-function killService(
+async function killService(
   rootDir: string,
   envName: string,
   svcName: string,
   port: number
-): void {
+): Promise<void> {
   const pid = readPid(rootDir, envName, svcName);
 
   if (pid) {
@@ -30,7 +30,25 @@ function killService(
     }
     deletePid(rootDir, envName, svcName);
   } else if (isPortInUse(port)) {
-    console.log(chalk.yellow(`  ⚠ ${svcName}: port ${port} in use but no PID file — kill manually`));
+    // Fallback: kill by port using lsof
+    console.log(chalk.dim(`  ○ ${svcName}: no PID file — killing by port ${port}...`));
+    try {
+      const { execSync } = await import('child_process');
+      const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf8' });
+      const pids = lsofOutput.trim().split('\n');
+      for (const p of pids) {
+        if (p) {
+          try {
+            process.kill(parseInt(p), 'SIGTERM');
+            console.log(chalk.green(`  ✓ ${svcName}`), chalk.dim(`(killed pid ${p} on port ${port})`));
+          } catch {
+            console.log(chalk.dim(`  ○ failed to kill pid ${p}`));
+          }
+        }
+      }
+    } catch {
+      console.log(chalk.yellow(`  ⚠ ${svcName}: port ${port} in use but couldn't kill`));
+    }
   } else {
     console.log(chalk.dim(`  ○ ${svcName}: not running`));
   }

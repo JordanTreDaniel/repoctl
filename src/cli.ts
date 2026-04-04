@@ -127,11 +127,12 @@ envCmd
   .command('destroy <name>')
   .description('Destroy an environment (removes worktrees and DB copy)')
   .option('--keep-db', 'Keep the database copy')
+  .option('--stop', 'Stop services before destroying')
   .option('-y, --yes', 'Skip confirmation prompt')
   .option('-c, --config <path>', 'Path to .repoctl.yaml')
   .action(async (name, opts) => {
     const { destroyEnv } = await import('./commands/env/destroy.js');
-    await destroyEnv(name, { keepDb: opts.keepDb, yes: opts.yes, configPath: opts.config });
+    await destroyEnv(name, { keepDb: opts.keepDb, yes: opts.yes, stop: opts.stop, configPath: opts.config });
   });
 
 // ─── lock ────────────────────────────────────────────────────────────────────

@@ -28,12 +28,27 @@ function spawnService(
     return;
   }
 
-  const [cmd, ...args] = command.split(' ');
-  const child = spawn(cmd, args, {
+  // Build env with PORT set - this will override what's in .env
+  const spawnEnv = { ...process.env, PORT: String(port) };
+
+  // Replace port in command string (e.g., -p 3001 -> -p 3011 or --port 3001 -> --port 3011)
+  // Also inject PORT env var into the command if it's an npm run command
+  let portReplacedCmd = command
+    .replace(new RegExp(`-p\\s*\\d+`, 'g'), `-p ${port}`)
+    .replace(new RegExp(`--port\\s*\\d+`, 'g'), `--port ${port}`);
+
+  // If command is "npm run X", also inject PORT= so it overrides package.json
+  if (portReplacedCmd.startsWith('npm run ')) {
+    portReplacedCmd = `PORT=${port} ${portReplacedCmd}`;
+  }
+
+  // Use shell to properly expand the command and env vars
+  const child = spawn(portReplacedCmd, {
     cwd,
     stdio: 'inherit',
     detached: true,
-    env: { ...process.env, PORT: String(port) },
+    env: spawnEnv,
+    shell: true,
   });
 
   child.on('error', (err) => {

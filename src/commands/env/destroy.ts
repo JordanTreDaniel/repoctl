@@ -9,6 +9,7 @@ import { deleteDatabase } from '../../core/database.js';
 export interface DestroyOptions {
   keepDb?: boolean;
   yes?: boolean;
+  stop?: boolean;
   configPath?: string;
 }
 
@@ -37,6 +38,14 @@ export async function destroyEnv(envName: string, opts: DestroyOptions): Promise
   }
 
   console.log(chalk.bold(`\n  Destroying environment: ${chalk.cyan(envName)}\n`));
+
+  // Stop services first if --stop flag is set
+  if (opts.stop) {
+    console.log(chalk.dim('  Stopping services...'));
+    const { stopEnv } = await import('./stop.js');
+    await stopEnv(envName, {});
+    console.log(chalk.dim('  ✓ services stopped'));
+  }
 
   // Remove worktrees
   console.log(chalk.dim('  Removing git worktrees...'));
