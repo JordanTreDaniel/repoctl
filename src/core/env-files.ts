@@ -2,7 +2,65 @@
 
 import fs from 'fs';
 import path from 'path';
-import type { RepoctlConfig, PortRewrite } from './types.js';
+import type { RepoctlConfig, PortRewrite, ServiceConfig } from './types.js';
+
+function autoDetectPortRewrites(
+  rootDir: string,
+  services: ServiceConfig[]
+): PortRewrite[] {
+  const rewrites: PortRewrite[] = [];
+  
+  for (const svc of services) {
+    const envPath = path.join(rootDir, svc.repo, svc.env_file ?? '.env');
+    
+    if (!fs.existsSync(envPath)) continue;
+    
+    const content = fs.readFileSync(envPath, 'utf8');
+    const lines = content.split('\n');
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) continue;
+      
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      
+      if (key.startsWith('NEXT_PUBLIC_') && (key.includes('URL') || key.includes('HOST'))) {
+        const urlMatch = value.match(/localhost:(\d+)/);
+        if (urlMatch) {
+          const refPort = parseInt(urlMatch[1], 10);
+          
+          const targetSvc = services.find((s) => s.port === refPort);
+          if (targetSvc && targetSvc.name !== svc.name) {
+            rewrites.push({
+              service: svc.name,
+              env_var: key,
+              template: `http://localhost:{${targetSvc.name}.port}`,
+            });
+          }
+        }
+      }
+      
+      if ((key.includes('API_URL') || key.includes('BACKEND_URL') || key.includes('FRONTEND_URL')) && value.includes('localhost')) {
+        for (const targetSvc of services) {
+          if (targetSvc.name !== svc.name && value.includes(String(targetSvc.port))) {
+            rewrites.push({
+              service: svc.name,
+              env_var: key,
+              template: `http://localhost:{${targetSvc.name}.port}`,
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  return rewrites;
+}
 
 // WHAT: reads an .env file into a key-value map
 // WHY:  patching individual vars requires parsing the file first
@@ -34,12 +92,12 @@ export function serializeEnvFile(vars: Record<string, string>): string {
 
 // WHAT: resolves a port_rewrite template to a concrete URL/value
 // WHY:  cross-service URLs reference each other by port; templates encode that relationship
-// EDGE: only supports {service.port} tokens; unknown tokens are left as-is
+// EDGE: only supports {service-name.port} tokens; unknown tokens are left as-is
 export function resolveTemplate(
   template: string,
   portMap: Record<string, number>
 ): string {
-  return template.replace(/\{(\w+)\.port\}/g, (_, svcName) => {
+  return template.replace(/\{([\w-]+)\.port\}/g, (_, svcName) => {
     const port = portMap[svcName];
     return port != null ? String(port) : `{${svcName}.port}`;
   });
@@ -78,8 +136,11 @@ export function setupEnvFile(opts: {
 
   // apply cross-service URL rewrites for this service
   const rewrites = portRewrites.filter((r) => r.service === targetServiceName);
+  console.log(`[DEBUG setupEnvFile] ${targetServiceName}: rewrites=`, JSON.stringify(rewrites));
   for (const rewrite of rewrites) {
-    vars[rewrite.env_var] = resolveTemplate(rewrite.template, portMap);
+    const resolved = resolveTemplate(rewrite.template, portMap);
+    console.log(`[DEBUG setupEnvFile] ${targetServiceName}: setting ${rewrite.env_var} = ${resolved}`);
+    vars[rewrite.env_var] = resolved;
   }
 
   // patch database file if this service owns it
@@ -121,6 +182,22 @@ export function setupAllEnvFiles(opts: {
 }): void {
   const { rootDir, config, envName, portMap, worktreePaths, dbFileName } = opts;
 
+  const explicitRewrites = config.port_rewrites ?? [];
+  const autoRewrites = autoDetectPortRewrites(rootDir, config.services);
+  
+  console.log('[DEBUG] Auto-detected rewrites:', JSON.stringify(autoRewrites, null, 2));
+  console.log('[DEBUG] portMap:', JSON.stringify(portMap));
+  
+  const mergedRewrites: PortRewrite[] = [...explicitRewrites];
+  for (const auto of autoRewrites) {
+    const exists = mergedRewrites.some(
+      (r) => r.service === auto.service && r.env_var === auto.env_var
+    );
+    if (!exists) {
+      mergedRewrites.push(auto);
+    }
+  }
+
   for (const svc of config.services) {
     const wtDir = worktreePaths[svc.name];
     const envFileName = svc.env_file ?? '.env';
@@ -128,13 +205,16 @@ export function setupAllEnvFiles(opts: {
 
     const isDbService = config.database?.service === svc.name;
 
+    const svcRewrites = mergedRewrites.filter((r) => r.service === svc.name);
+    console.log(`[DEBUG] ${svc.name} rewrites:`, JSON.stringify(svcRewrites));
+
     setupEnvFile({
       sourceEnvPath,
       targetDir: wtDir,
       envFileName,
       portMap,
       servicePort: portMap[svc.name],
-      portRewrites: config.port_rewrites ?? [],
+      portRewrites: mergedRewrites,
       targetServiceName: svc.name,
       dbEnvVar: isDbService ? config.database?.env_var : undefined,
       dbFileName: isDbService ? dbFileName : undefined,

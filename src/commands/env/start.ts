@@ -1,17 +1,57 @@
 // ✦ start.ts — implements 'repoctl env start <name>'
 
 import path from 'path';
+import fs from 'fs';
 import chalk from 'chalk';
 import { spawn } from 'child_process';
 import { loadConfig } from '../../core/config.js';
 import { readManifest, writeManifest, writePid } from '../../core/manifest.js';
 import { isPortInUse } from '../../core/ports.js';
 import { preRunDone, runPreRunStreaming } from '../../core/pre-run.js';
+import { discoverPortConfig } from '../../core/port-discovery.js';
 
 export interface StartOptions {
   service?: string;
   configPath?: string;
   force?: boolean;
+}
+
+const K_WRAPPER_FILENAME = '.repoctl-wrapper.sh';
+
+function stripPortFlags(command: string): string {
+  let stripped = command
+    .replace(/-p\s*\d+/g, '')
+    .replace(/--port\s+\d+/g, '')
+    .replace(/--port=\d+/g, '')
+    .trim();
+  stripped = stripped.replace(/\s+/g, ' ');
+  return stripped;
+}
+
+function generateWrapperScript(
+  serviceName: string,
+  command: string,
+  port: number,
+  envVar: string = 'PORT'
+): string {
+  const strippedCommand = stripPortFlags(command);
+  
+  return `#!/bin/bash
+# repoctl wrapper for ${serviceName} — auto-generated, do not edit manually
+# This ensures port ${port} has final say over any hardcoded ports
+
+export ${envVar}=${port}
+export NODE_OPTIONS="--max-old-space-size=4096"
+
+exec ${strippedCommand}
+`;
+}
+
+function writeWrapperScript(cwd: string, serviceName: string, command: string, port: number, envVar: string = 'PORT'): void {
+  const wrapperPath = path.join(cwd, K_WRAPPER_FILENAME);
+  const content = generateWrapperScript(serviceName, command, port, envVar);
+  fs.writeFileSync(wrapperPath, content, 'utf8');
+  fs.chmodSync(wrapperPath, 0o755);
 }
 
 // WHAT: spawns a single service process inside its worktree directory
@@ -22,39 +62,29 @@ function spawnService(
   command: string,
   cwd: string,
   port: number,
-  basePort: number,
   rootDir: string,
-  envName: string
+  envName: string,
+  portInterface: 'env' | 'cli' | 'env_file' | 'script' | 'auto',
+  portEnvVar: string = 'PORT'
 ): void {
   if (isPortInUse(port)) {
     console.log(chalk.yellow(`  ⚠ ${name}: port ${port} already in use — skipping`));
     return;
   }
 
-  // If command has explicit -p with base port, remove it so PORT env var works
-  // If command has explicit -p with DIFFERENT port, replace it
-  // If no -p at all, just use PORT
-  let portReplacedCmd = command;
-  if (command.includes(`-p ${basePort}`) || command.includes(`-p${basePort}`)) {
-    // Remove -p <basePort> so PORT env var takes effect
-    portReplacedCmd = command
-      .replace(new RegExp(`-p\\s*${basePort}\\b`, 'g'), '')
-      .replace(new RegExp(`--port\\s*${basePort}\\b`, 'g'), '');
-  } else if (command.includes('-p ') || command.includes('--port ')) {
-    // Has explicit port that's NOT the base port - replace it
-    portReplacedCmd = command
-      .replace(new RegExp(`-p\\s*\\d+`, 'g'), `-p ${port}`)
-      .replace(new RegExp(`--port\\s*\\d+`, 'g'), `--port ${port}`);
+  const envVar = portEnvVar || 'PORT';
+  
+  if (portInterface === 'auto' || portInterface === 'script' || !command) {
+    writeWrapperScript(cwd, name, command, port, envVar);
+    command = `bash ${K_WRAPPER_FILENAME}`;
+  } else {
+    writeWrapperScript(cwd, name, command, port, envVar);
+    command = `bash ${K_WRAPPER_FILENAME}`;
   }
 
-  // Build env with PORT set - this will override what's in .env
-  const spawnEnv = { ...process.env, PORT: String(port) };
+  const spawnEnv = { ...process.env, [envVar]: String(port) };
 
-  // Export PORT before the command so it overrides .env file reading
-  portReplacedCmd = `export PORT=${port}; ${portReplacedCmd}`;
-
-  // Use shell to properly expand the command and env vars
-  const child = spawn(portReplacedCmd, {
+  const child = spawn(command, {
     cwd,
     stdio: 'inherit',
     detached: true,
@@ -140,14 +170,25 @@ export async function startEnv(envName: string, opts: StartOptions): Promise<voi
       continue;
     }
 
+    let portInterface = svc.port_interface || 'auto';
+    let portEnvVar = svc.port_env_var || 'PORT';
+    
+    if (portInterface === 'auto' && svc.auto_detect !== false) {
+      const discovered = discoverPortConfig(svcManifest.worktree_path);
+      console.log(chalk.dim(`  🔍 ${svc.name}: detected ${discovered.interface} interface (${Math.round(discovered.confidence * 100)}% confidence)`));
+      if (discovered.envVar) portEnvVar = discovered.envVar;
+      portInterface = discovered.interface;
+    }
+
     spawnService(
       svc.name,
       svc.start,
       svcManifest.worktree_path,
       svcManifest.port,
-      svc.port,
       rootDir,
-      envName
+      envName,
+      portInterface,
+      portEnvVar
     );
   }
 

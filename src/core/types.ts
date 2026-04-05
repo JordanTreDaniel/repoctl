@@ -1,5 +1,7 @@
 // ✦ types.ts — shared TypeScript types for repoctl config, manifests, and runtime state
 
+export type PortInterface = 'env' | 'cli' | 'env_file' | 'script' | 'auto' | 'unknown';
+
 export interface ServiceConfig {
   name: string;
   repo: string;
@@ -7,6 +9,10 @@ export interface ServiceConfig {
   start: string | null;
   env_file?: string;
   pre_run?: string | string[] | boolean;
+  port_interface?: PortInterface;
+  port_env_var?: string;
+  port_cli_flag?: string;
+  auto_detect?: boolean;
 }
 
 export interface PortRewrite {

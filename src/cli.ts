@@ -126,14 +126,27 @@ envCmd
 
 envCmd
   .command('destroy <name>')
-  .description('Destroy an environment (removes worktrees and DB copy)')
+  .description('Destroy an environment (removes worktrees, DB copy, and optionally remote branches)')
   .option('--keep-db', 'Keep the database copy')
   .option('--stop', 'Stop services before destroying')
-  .option('-y, --yes', 'Skip confirmation prompt')
+  .option('--cleanup-remote', 'Also delete remote branches and close associated PRs (requires --yes or confirmation)')
+  .option('--kill-ports', 'Kill processes occupying env ports (requires --yes or confirmation; use --force for aggressive kill)')
+  .option('-y, --yes', 'Skip confirmation prompts')
+  .option('--force', 'Skip all confirmations and use aggressive cleanup (SIGKILL, force delete, etc.)')
+  .option('--dry-run', 'Show what would be deleted without making changes')
   .option('-c, --config <path>', 'Path to .repoctl.yaml')
   .action(async (name, opts) => {
     const { destroyEnv } = await import('./commands/env/destroy.js');
-    await destroyEnv(name, { keepDb: opts.keepDb, yes: opts.yes, stop: opts.stop, configPath: opts.config });
+    await destroyEnv(name, {
+      keepDb: opts.keepDb,
+      yes: opts.yes,
+      stop: opts.stop,
+      cleanupRemote: opts.cleanupRemote,
+      killPorts: opts.killPorts,
+      force: opts.force,
+      dryRun: opts.dryRun,
+      configPath: opts.config,
+    });
   });
 
 envCmd
