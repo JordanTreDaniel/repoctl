@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import { loadConfig, ensureStateDir } from '../../core/config.js';
 import { envExists, writeManifest } from '../../core/manifest.js';
 import { nextEnvIndex, computePortMap, checkPortConflicts } from '../../core/ports.js';
-import { addWorktreesForEnv } from '../../core/worktrees.js';
+import { addWorktreesForEnv, createWrapper } from '../../core/worktrees.js';
 import { setupAllEnvFiles } from '../../core/env-files.js';
 import { copyDatabase, seedDatabase } from '../../core/database.js';
 import type { EnvManifest } from '../../core/types.js';
@@ -65,6 +65,11 @@ export async function createEnv(envName: string, opts: CreateOptions): Promise<v
     };
     console.log(chalk.dim(`    ✓ ${svcName} → ${result.branch}`));
   }
+
+  // Create symlink wrapper for unified access
+  console.log(chalk.dim('  Creating symlink wrapper...'));
+  createWrapper(rootDir, envName, worktreePaths);
+  console.log(chalk.dim(`    ✓ .repoctl-worktrees/${envName}/`));
 
   // Copy database
   let dbFilename: string | undefined;

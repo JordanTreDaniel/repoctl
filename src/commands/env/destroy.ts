@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { loadConfig } from '../../core/config.js';
 import { readManifest, deleteManifest, deletePid } from '../../core/manifest.js';
-import { removeWorktreesForEnv } from '../../core/worktrees.js';
+import { removeWorktreesForEnv, removeWrapper } from '../../core/worktrees.js';
 import { deleteDatabase } from '../../core/database.js';
 
 export interface DestroyOptions {
@@ -51,6 +51,11 @@ export async function destroyEnv(envName: string, opts: DestroyOptions): Promise
   console.log(chalk.dim('  Removing git worktrees...'));
   removeWorktreesForEnv(rootDir, config, envName);
   console.log(chalk.dim('    ✓ worktrees removed'));
+
+  // Remove symlink wrapper
+  console.log(chalk.dim('  Removing symlink wrapper...'));
+  removeWrapper(rootDir, envName);
+  console.log(chalk.dim('    ✓ wrapper removed'));
 
   // Remove database
   if (config.database && !opts.keepDb) {

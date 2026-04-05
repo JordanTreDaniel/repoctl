@@ -84,6 +84,11 @@ repoctl env create <name>           # create isolated environment
   --no-db                            # skip DB copy
   --seed                             # run seed command after DB copy
 
+repoctl env bind <name>            # bind to feature-env for AI agents
+repoctl env active                  # show currently bound env
+repoctl env unbind                  # clear binding
+repoctl env info <name>             # detailed env info
+
 repoctl env start <name>            # start all services
   --service <name>                   # start one service only
 
@@ -139,11 +144,15 @@ services:
     port_offset: 0
     start: npm run start:dev
     env_file: .env
+    pre_run: npm install      # run before starting (default: "npm install" if true)
 
   - name: app
     repo: frontend/my-app
     port_offset: 1
     start: npm run dev
+    pre_run:                 # true = npm install, false = skip, "always" = rerun each time
+      - npm install
+      - npm run build
 
 port_rewrites:
   - service: app
@@ -163,6 +172,44 @@ worktree_copy:
 ```
 
 See `.repoctl.example.yaml` for full annotations.
+
+---
+
+## Pre-run scripts
+
+Worktrees are fresh checkouts — they need `npm install` before services can start. Configure `pre_run` to automatically run setup commands:
+
+```yaml
+services:
+  - name: app
+    repo: frontend/my-app
+    start: npm run dev
+    pre_run: npm install    # runs once, then skips (marker file created)
+```
+
+**Values:**
+
+| Value | Behavior |
+|-------|----------|
+| `true` | Run `npm install` |
+| `false` | Skip pre-run entirely |
+| `"always"` | Run every time (no marker file) |
+| `string` | Run that command |
+| `array` | Run all commands in sequence |
+
+**How it works:**
+
+1. On `repoctl env start`, checks for `.repoctl-pre-run-done` marker file
+2. If marker exists (and not `"always"`), skips pre-run
+3. Runs commands with streaming output
+4. On success, writes marker file with timestamp
+5. Then starts the service
+
+**Force re-run:**
+
+```bash
+repoctl env start my-env --force   # re-run pre_run even if done
+```
 
 ---
 
@@ -195,6 +242,7 @@ All state lives in `.repoctl/` at the project root:
   pids/
     feature-auth-api.pid # PID of the running service
   known-good.yaml        # recorded known-good SHA combos
+  active.yaml            # currently bound feature-env (for AI agents)
 ```
 
 Add `.repoctl/` to your project root's `.gitignore`.
@@ -218,6 +266,41 @@ claude /path/to/project/backend/my-api/.repoctl-worktrees/feature-auth
 ```
 
 The AI agent works in an isolated copy. Your main checkout is untouched.
+
+### Feature-env binding (soft bounding)
+
+For AI agents that support it, bind an environment to enable "soft bounding" — telling the agent which repos belong to which feature:
+
+```bash
+# Bind to a feature-env
+repoctl env bind feature-auth
+
+# See what's bound
+repoctl env active
+
+# Clear binding when done
+repoctl env unbind
+```
+
+This writes `.repoctl/active.yaml` with:
+- Environment name
+- Timestamp
+- All bound worktree paths
+
+AI agents can read this file on startup to understand their context.
+
+### Symlink wrapper
+
+Creating an environment also creates a unified view at `.repoctl-worktrees/<name>/`:
+
+```
+.repoctl-worktrees/feature-auth/
+  ├── my-api  → /path/to/project/backend/my-api/.repoctl-worktrees/feature-auth
+  ├── my-app  → /path/to/project/frontend/my-app/.repoctl-worktrees/feature-auth
+  └── my-chat → /path/to/project/chat/my-chat/.repoctl-worktrees/feature-auth
+```
+
+This gives you a single directory to view all feature-repos. It's optional — the binding system works without it.
 
 ---
 

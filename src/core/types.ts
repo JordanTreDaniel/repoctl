@@ -6,6 +6,7 @@ export interface ServiceConfig {
   port: number;
   start: string | null;
   env_file?: string;
+  pre_run?: string | string[] | boolean;
 }
 
 export interface PortRewrite {
@@ -38,6 +39,8 @@ export interface ServiceManifest {
   branch: string;
   sha: string;
   pid?: number;
+  pre_run_done?: boolean;
+  pre_run_error?: string;
 }
 
 export interface EnvManifest {

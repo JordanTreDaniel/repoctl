@@ -4,12 +4,14 @@ import path from 'path';
 import chalk from 'chalk';
 import { spawn } from 'child_process';
 import { loadConfig } from '../../core/config.js';
-import { readManifest, writePid } from '../../core/manifest.js';
+import { readManifest, writeManifest, writePid } from '../../core/manifest.js';
 import { isPortInUse } from '../../core/ports.js';
+import { preRunDone, runPreRunStreaming } from '../../core/pre-run.js';
 
 export interface StartOptions {
   service?: string;
   configPath?: string;
+  force?: boolean;
 }
 
 // WHAT: spawns a single service process inside its worktree directory
@@ -20,6 +22,7 @@ function spawnService(
   command: string,
   cwd: string,
   port: number,
+  basePort: number,
   rootDir: string,
   envName: string
 ): void {
@@ -28,19 +31,27 @@ function spawnService(
     return;
   }
 
+  // If command has explicit -p with base port, remove it so PORT env var works
+  // If command has explicit -p with DIFFERENT port, replace it
+  // If no -p at all, just use PORT
+  let portReplacedCmd = command;
+  if (command.includes(`-p ${basePort}`) || command.includes(`-p${basePort}`)) {
+    // Remove -p <basePort> so PORT env var takes effect
+    portReplacedCmd = command
+      .replace(new RegExp(`-p\\s*${basePort}\\b`, 'g'), '')
+      .replace(new RegExp(`--port\\s*${basePort}\\b`, 'g'), '');
+  } else if (command.includes('-p ') || command.includes('--port ')) {
+    // Has explicit port that's NOT the base port - replace it
+    portReplacedCmd = command
+      .replace(new RegExp(`-p\\s*\\d+`, 'g'), `-p ${port}`)
+      .replace(new RegExp(`--port\\s*\\d+`, 'g'), `--port ${port}`);
+  }
+
   // Build env with PORT set - this will override what's in .env
   const spawnEnv = { ...process.env, PORT: String(port) };
 
-  // Replace port in command string (e.g., -p 3001 -> -p 3011 or --port 3001 -> --port 3011)
-  // Also inject PORT env var into the command if it's an npm run command
-  let portReplacedCmd = command
-    .replace(new RegExp(`-p\\s*\\d+`, 'g'), `-p ${port}`)
-    .replace(new RegExp(`--port\\s*\\d+`, 'g'), `--port ${port}`);
-
-  // If command is "npm run X", also inject PORT= so it overrides package.json
-  if (portReplacedCmd.startsWith('npm run ')) {
-    portReplacedCmd = `PORT=${port} ${portReplacedCmd}`;
-  }
+  // Export PORT before the command so it overrides .env file reading
+  portReplacedCmd = `export PORT=${port}; ${portReplacedCmd}`;
 
   // Use shell to properly expand the command and env vars
   const child = spawn(portReplacedCmd, {
@@ -84,6 +95,39 @@ export async function startEnv(envName: string, opts: StartOptions): Promise<voi
 
   console.log(chalk.bold(`\n  Starting environment: ${chalk.cyan(envName)}\n`));
 
+  // Run pre_run for all services first
+  for (const svc of services) {
+    const svcManifest = manifest.services[svc.name];
+    if (!svcManifest) continue;
+    if (svc.start === null) continue;
+
+    const configPreRun = svc.pre_run;
+    if (configPreRun === false || configPreRun === undefined) continue;
+
+    if (!opts.force && preRunDone(svcManifest.worktree_path, configPreRun)) {
+      console.log(chalk.dim(`  ⊘ ${svc.name}: pre-run already done — skipping`));
+      continue;
+    }
+
+    console.log(chalk.dim(`  ⚙ ${svc.name}: running pre-run...`));
+    const result = await runPreRunStreaming(svcManifest.worktree_path, configPreRun, (output) => {
+      process.stdout.write(output);
+    });
+
+    if (!result.success) {
+      console.error(chalk.red(`  ✗ ${svc.name}: pre-run failed — ${result.error}`));
+      manifest.services[svc.name].pre_run_done = false;
+      manifest.services[svc.name].pre_run_error = result.error;
+      writeManifest(rootDir, manifest);
+      continue;
+    }
+
+    manifest.services[svc.name].pre_run_done = true;
+    writeManifest(rootDir, manifest);
+    console.log(chalk.green(`  ✓ ${svc.name}: pre-run complete`));
+  }
+
+  // Now spawn all services
   for (const svc of services) {
     const svcManifest = manifest.services[svc.name];
     if (!svcManifest) {
@@ -101,6 +145,7 @@ export async function startEnv(envName: string, opts: StartOptions): Promise<voi
       svc.start,
       svcManifest.worktree_path,
       svcManifest.port,
+      svc.port,
       rootDir,
       envName
     );

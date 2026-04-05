@@ -54,10 +54,10 @@ export function addWorktree(
   return { worktreePath: wtPath, branch: branchName, sha };
 }
 
-// WHAT: removes a git worktree and cleans up the worktree metadata
-// WHY:  env destroy must clean up worktrees to avoid git's "already exists" errors on recreate
+// WHAT: removes a git worktree and cleans up the worktree metadata + branch
+// WHY:  env destroy must clean up worktrees + branches to avoid git's "already exists" errors on recreate
 // EDGE: uses --force to remove even if there are uncommitted changes — warn the user before calling
-export function removeWorktree(rootDir: string, svcRepo: string, envName: string): void {
+export function removeWorktree(rootDir: string, svcRepo: string, envName: string, svcName: string): void {
   const repoDir = path.join(rootDir, svcRepo);
   const wtPath = path.join(repoDir, '.repoctl-worktrees', envName);
 
@@ -69,6 +69,14 @@ export function removeWorktree(rootDir: string, svcRepo: string, envName: string
     // fallback: manually remove directory and prune
     fs.rmSync(wtPath, { recursive: true, force: true });
     execSync(`git -C "${repoDir}" worktree prune`, { stdio: 'inherit' });
+  }
+
+  // Clean up the associated branch
+  const branchName = worktreeBranch(envName, svcName);
+  try {
+    execSync(`git -C "${repoDir}" branch -D "${branchName}"`, { stdio: 'pipe' });
+  } catch {
+    // Silently skip if branch doesn't exist or deletion fails
   }
 }
 
@@ -89,7 +97,7 @@ export function addWorktreesForEnv(
 }
 
 // WHAT: removes all service worktrees for an environment
-// WHY:  env destroy must clean up all repos atomically
+// WHY:  env destroy must clean up all repos + branches atomically
 // EDGE: silently skips repos where the worktree doesn't exist (partial create scenario)
 export function removeWorktreesForEnv(
   rootDir: string,
@@ -97,7 +105,7 @@ export function removeWorktreesForEnv(
   envName: string
 ): void {
   for (const svc of config.services) {
-    removeWorktree(rootDir, svc.repo, envName);
+    removeWorktree(rootDir, svc.repo, envName, svc.name);
   }
 }
 
@@ -113,6 +121,55 @@ export function getCurrentSha(worktreePath: string): string {
 // EDGE: this is a detached HEAD if a SHA is passed; pass a branch name to stay on a branch
 export function checkoutInWorktree(wtPath: string, ref: string): void {
   execSync(`git -C "${wtPath}" checkout "${ref}"`, { stdio: 'inherit' });
+}
+
+// WHAT: returns the symlink wrapper path for a feature-env
+// WHY:  provides a unified entry point to all worktrees in an env
+// EDGE: path is at the project root level, not inside any repo
+export function getWrapperPath(rootDir: string, envName: string): string {
+  return path.join(rootDir, '.repoctl-worktrees', envName);
+}
+
+// WHAT: creates a symlink wrapper directory for a feature-env
+// WHY:  gives a unified view of all worktrees in an env; enables agent binding
+// EDGE: creates parent dirs; fails if wrapper already exists
+export function createWrapper(rootDir: string, envName: string, worktreePaths: Record<string, string>): void {
+  const wrapperPath = getWrapperPath(rootDir, envName);
+  if (fs.existsSync(wrapperPath)) {
+    throw new Error(`Wrapper already exists at ${wrapperPath}`);
+  }
+  fs.mkdirSync(wrapperPath, { recursive: true });
+  for (const [svcName, wtPath] of Object.entries(worktreePaths)) {
+    const linkPath = path.join(wrapperPath, svcName);
+    fs.symlinkSync(wtPath, linkPath);
+  }
+}
+
+// WHAT: removes the symlink wrapper for an env
+// WHY:  cleanup when destroying an env
+// EDGE: only removes the wrapper dir, not the actual worktrees
+export function removeWrapper(rootDir: string, envName: string): void {
+  const wrapperPath = getWrapperPath(rootDir, envName);
+  if (fs.existsSync(wrapperPath)) {
+    fs.rmSync(wrapperPath, { recursive: true, force: true });
+  }
+}
+
+// WHAT: reads the wrapper contents to get all bound worktree paths
+// WHY:  lets bind/info commands show what's in an env
+// EDGE: returns empty obj if wrapper doesn't exist
+export function readWrapper(rootDir: string, envName: string): Record<string, string> {
+  const wrapperPath = getWrapperPath(rootDir, envName);
+  const result: Record<string, string> = {};
+  if (!fs.existsSync(wrapperPath)) return result;
+  for (const entry of fs.readdirSync(wrapperPath)) {
+    const linkPath = path.join(wrapperPath, entry);
+    const stat = fs.lstatSync(linkPath);
+    if (stat.isSymbolicLink()) {
+      result[entry] = fs.readlinkSync(linkPath);
+    }
+  }
+  return result;
 }
 
 // ✦ END worktrees.ts

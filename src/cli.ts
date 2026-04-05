@@ -97,10 +97,11 @@ envCmd
   .command('start <name>')
   .description('Start services for an environment')
   .option('-s, --service <name>', 'Start only this service')
+  .option('-f, --force', 'Force re-run pre-run scripts')
   .option('-c, --config <path>', 'Path to .repoctl.yaml')
   .action(async (name, opts) => {
     const { startEnv } = await import('./commands/env/start.js');
-    await startEnv(name, { service: opts.service, configPath: opts.config });
+    await startEnv(name, { service: opts.service, configPath: opts.config, force: opts.force });
   });
 
 envCmd
@@ -133,6 +134,43 @@ envCmd
   .action(async (name, opts) => {
     const { destroyEnv } = await import('./commands/env/destroy.js');
     await destroyEnv(name, { keepDb: opts.keepDb, yes: opts.yes, stop: opts.stop, configPath: opts.config });
+  });
+
+envCmd
+  .command('bind <name>')
+  .description('Bind to a feature-env, writing .repoctl/active.yaml for agent binding')
+  .option('-c, --config <path>', 'Path to .repoctl.yaml')
+  .action(async (name, opts) => {
+    const { bindEnv } = await import('./commands/env/bind.js');
+    bindEnv(name, { configPath: opts.config });
+  });
+
+envCmd
+  .command('info <name>')
+  .description('Show detailed info about a feature-env')
+  .option('-c, --config <path>', 'Path to .repoctl.yaml')
+  .action(async (name, opts) => {
+    const { infoEnv } = await import('./commands/env/info.js');
+    infoEnv(name, { configPath: opts.config });
+  });
+
+envCmd
+  .command('active')
+  .description('Show currently bound feature-env')
+  .option('-j, --json', 'Output as JSON')
+  .option('-c, --config <path>', 'Path to .repoctl.yaml')
+  .action(async (opts) => {
+    const { showActive } = await import('./commands/env/active.js');
+    showActive({ configPath: opts.config, json: opts.json });
+  });
+
+envCmd
+  .command('unbind')
+  .description('Clear the active feature-env binding')
+  .option('-c, --config <path>', 'Path to .repoctl.yaml')
+  .action(async (opts) => {
+    const { clearActive } = await import('./commands/env/active.js');
+    clearActive({ configPath: opts.config });
   });
 
 // ─── lock ────────────────────────────────────────────────────────────────────

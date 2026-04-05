@@ -79,7 +79,8 @@ function findStartCommandAndPort(repoDir: string): { start: string | null; port:
     const key = devKeys[0];
     const value = scripts[key];
     const port = extractPortFromScript(value);
-    return { start: `npm run ${key}`, port };
+    // Store the actual expanded command, not "npm run dev" - so port can be replaced at runtime
+    return { start: value, port };
   }
 
   // Otherwise, look for a script with "start" in the key
@@ -88,7 +89,8 @@ function findStartCommandAndPort(repoDir: string): { start: string | null; port:
     const key = startKeys[0];
     const value = scripts[key];
     const port = extractPortFromScript(value);
-    return { start: `npm run ${key}`, port };
+    // Store the actual expanded command, not "npm run start" - so port can be replaced at runtime
+    return { start: value, port };
   }
 
   return { start: null, port: null };
@@ -151,10 +153,10 @@ export async function initProject(): Promise<void> {
   console.log(chalk.dim('  Base ports: each service gets a base port (e.g., 3000, 3001, 3002)\n'));
   console.log(chalk.dim('  Worktree offset: each new environment adds this to all ports\n'));
 
-  const envOffset = await number({
-    message: '  Worktree port offset:',
+  const envOffset = (await number({
+    message: 'Port offset between environments:',
     default: 10,
-  });
+  })) || 10;
 
   const services: ServiceConfig[] = [];
 
@@ -185,10 +187,10 @@ export async function initProject(): Promise<void> {
       });
     }
 
-    const port = await number({
+    const port = (await number({
       message: '    Base port:',
       default: detectedPort ?? (3000 + i),
-    });
+    })) || 3000;
 
     const envFile = await input({ message: '    .env file name:', default: '.env' });
 
