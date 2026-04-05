@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { loadConfig, ensureStateDir } from '../../core/config.js';
 import { envExists, writeManifest } from '../../core/manifest.js';
-import { nextEnvIndex, computePortMap, checkPortConflicts } from '../../core/ports.js';
+import { nextEnvIndex, computePortMap, checkPortConflicts, checkIndexCollision } from '../../core/ports.js';
 import { addWorktreesForEnv, createWrapper } from '../../core/worktrees.js';
 import { setupAllEnvFiles } from '../../core/env-files.js';
 import { copyDatabase, seedDatabase } from '../../core/database.js';
@@ -29,7 +29,16 @@ export async function createEnv(envName: string, opts: CreateOptions): Promise<v
     process.exit(1);
   }
 
-  const envIndex = nextEnvIndex(rootDir);
+  let envIndex = nextEnvIndex(rootDir);
+  
+  // Defensive check: retry with incremented indexes if collision detected.
+  // This guards against edge cases where nextEnvIndex might fail (filesystem race conditions,
+  // stale manifest reads, etc.) and ensures we always get a unique env_index.
+  // See: https://github.com/anomalyco/repoctl/issues (port assignment bug)
+  while (checkIndexCollision(rootDir, envIndex, envName)) {
+    envIndex++;
+  }
+  
   const portMap = computePortMap(config, envIndex);
 
   console.log(chalk.bold(`\n  Creating environment: ${chalk.cyan(envName)}\n`));
