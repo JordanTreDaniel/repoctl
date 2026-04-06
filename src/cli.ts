@@ -62,15 +62,32 @@ envCmd
   .command('create <name>')
   .description('Create a new isolated environment')
   .option('-b, --branch <branch>', 'Check out this branch in all repos')
+  .option('--spawning-branch <spec>', 'Set spawning branch per service (format: service=branch, repeatable)')
   .option('--no-db', 'Skip database copy')
   .option('--seed', 'Run seed command after DB copy')
   .option('-c, --config <path>', 'Path to .repoctl.yaml')
   .action(async (name, opts) => {
     const { createEnv } = await import('./commands/env/create.js');
+    
+    // Parse --spawning-branch flags into Record<service, branch>
+    const spawningBranches: Record<string, string> = {};
+    if (opts.spawningBranch) {
+      const specs = Array.isArray(opts.spawningBranch) ? opts.spawningBranch : [opts.spawningBranch];
+      for (const spec of specs) {
+        const [service, branch] = spec.split('=');
+        if (!service || !branch) {
+          console.error(`\nInvalid spawning-branch format: '${spec}'. Use: service=branch\n`);
+          process.exit(1);
+        }
+        spawningBranches[service] = branch;
+      }
+    }
+    
     await createEnv(name, {
       branch: opts.branch,
       noDb: !opts.db,
       seed: opts.seed,
+      spawningBranches: Object.keys(spawningBranches).length > 0 ? spawningBranches : undefined,
       configPath: opts.config,
     });
   });
@@ -130,9 +147,9 @@ envCmd
   .option('--keep-db', 'Keep the database copy')
   .option('--stop', 'Stop services before destroying')
   .option('--cleanup-remote', 'Also delete remote branches and close associated PRs (requires --yes or confirmation)')
-  .option('--kill-ports', 'Kill processes occupying env ports (requires --yes or confirmation; use --force for aggressive kill)')
+  .option('--keep-ports', 'Skip killing stray processes on env ports (default: auto-kill with --force)')
   .option('-y, --yes', 'Skip confirmation prompts')
-  .option('--force', 'Skip all confirmations and use aggressive cleanup (SIGKILL, force delete, etc.)')
+  .option('--force', 'Skip all confirmations and aggressively clean up (SIGKILL, force delete, auto-kill ports, etc.)')
   .option('--dry-run', 'Show what would be deleted without making changes')
   .option('-c, --config <path>', 'Path to .repoctl.yaml')
   .action(async (name, opts) => {
@@ -142,7 +159,8 @@ envCmd
       yes: opts.yes,
       stop: opts.stop,
       cleanupRemote: opts.cleanupRemote,
-      killPorts: opts.killPorts,
+      killPorts: opts.force,
+      keepPorts: opts.keepPorts,
       force: opts.force,
       dryRun: opts.dryRun,
       configPath: opts.config,
@@ -184,6 +202,35 @@ envCmd
   .action(async (opts) => {
     const { clearActive } = await import('./commands/env/active.js');
     clearActive({ configPath: opts.config });
+  });
+
+envCmd
+  .command('merge <name>')
+  .description('Merge worktree branches into spawning/current branches')
+  .option('--from-branch <branch>', 'Source branch (default: worktree branch)')
+  .option('--into-branch <branch>', 'Target branch (default: spawning_branch or current)')
+  .option('-s, --service <name>', 'Merge only this service')
+  .option('--cherry-pick <commit>', 'Cherry-pick instead of merge')
+  .option('--rebase', 'Rebase instead of merge')
+  .option('--squash', 'Squash merge')
+  .option('--push', 'Push to remote after merge (default unless REPOCTL_CAREFUL=true)')
+  .option('--no-push', 'Skip push to remote')
+  .option('--dry-run', 'Preview what would happen')
+  .option('-c, --config <path>', 'Path to .repoctl.yaml')
+  .action(async (name, opts) => {
+    const { mergeEnv } = await import('./commands/env/merge.js');
+    await mergeEnv(name, {
+      fromBranch: opts.fromBranch,
+      intoBranch: opts.intoBranch,
+      service: opts.service,
+      cherryPick: opts.cherryPick,
+      rebase: opts.rebase,
+      squash: opts.squash,
+      push: opts.push,
+      noPush: opts.noPush,
+      dryRun: opts.dryRun,
+      configPath: opts.config,
+    });
   });
 
 // ─── lock ────────────────────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 // ✦ create.ts — implements 'repoctl env create <name>'
 
 import chalk from 'chalk';
+import { execSync } from 'child_process';
+import path from 'path';
 import { loadConfig, ensureStateDir } from '../../core/config.js';
 import { envExists, writeManifest } from '../../core/manifest.js';
 import { nextEnvIndex, computePortMap, checkPortConflicts, checkIndexCollision } from '../../core/ports.js';
@@ -13,7 +15,16 @@ export interface CreateOptions {
   branch?: string;
   noDb?: boolean;
   seed?: boolean;
+  spawningBranches?: Record<string, string>;
   configPath?: string;
+}
+
+function getCurrentBranch(repoDir: string): string {
+  try {
+    return execSync(`git -C "${repoDir}" branch --show-current`, { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
 }
 
 // WHAT: creates an isolated dev environment with its own worktrees, ports, .env files, and DB copy
@@ -58,6 +69,20 @@ export async function createEnv(envName: string, opts: CreateOptions): Promise<v
   }
   console.log();
 
+  // Capture spawning branches before creating worktrees
+  const spawningBranches: Record<string, string> = {};
+  for (const svc of config.services) {
+    const repoDir = path.join(rootDir, svc.repo);
+    // Priority: CLI override > config file override > auto-detect
+    if (opts.spawningBranches?.[svc.name]) {
+      spawningBranches[svc.name] = opts.spawningBranches[svc.name];
+    } else if (svc.spawning_branch) {
+      spawningBranches[svc.name] = svc.spawning_branch;
+    } else {
+      spawningBranches[svc.name] = getCurrentBranch(repoDir);
+    }
+  }
+
   // Create worktrees
   console.log(chalk.dim('  Creating git worktrees...'));
   const worktreeResults = addWorktreesForEnv(rootDir, config, envName, opts.branch);
@@ -70,6 +95,7 @@ export async function createEnv(envName: string, opts: CreateOptions): Promise<v
       port: portMap[svcName],
       worktree_path: result.worktreePath,
       branch: result.branch,
+      spawning_branch: spawningBranches[svcName] || undefined,
       sha: result.sha,
     };
     console.log(chalk.dim(`    ✓ ${svcName} → ${result.branch}`));

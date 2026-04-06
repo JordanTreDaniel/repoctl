@@ -13,6 +13,7 @@ export interface ServiceConfig {
   port_env_var?: string;
   port_cli_flag?: string;
   auto_detect?: boolean;
+  spawning_branch?: string;
 }
 
 export interface PortRewrite {
@@ -43,6 +44,7 @@ export interface ServiceManifest {
   port: number;
   worktree_path: string;
   branch: string;
+  spawning_branch?: string;
   sha: string;
   pid?: number;
   pre_run_done?: boolean;

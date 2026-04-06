@@ -25,6 +25,7 @@ export interface DestroyOptions {
   stop?: boolean;
   cleanupRemote?: boolean;
   killPorts?: boolean;
+  keepPorts?: boolean;
   force?: boolean;
   dryRun?: boolean;
   configPath?: string;
@@ -125,6 +126,16 @@ export async function destroyEnv(envName: string, opts: DestroyOptions): Promise
   // PHASE 2: STOP SERVICES
   // ─────────────────────────────────────────────────────────────────
 
+  const report: DestroyReport = {
+    successCount: 0,
+    failureCount: 0,
+    failures: [],
+    warnings: [],
+    remoteBranchesDeletedCount: 0,
+    prsClosedCount: 0,
+    portsReleasedCount: 0,
+  };
+
   if (opts.stop) {
     console.log(chalk.dim('\n  Stopping services...'));
     const { stopEnv } = await import('./stop.js');
@@ -191,18 +202,59 @@ export async function destroyEnv(envName: string, opts: DestroyOptions): Promise
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // PHASE 4: REMOTE CLEANUP (branches + PRs) — ONLY WITH --cleanup-remote
+  // PHASE 3b: AUTOMATIC PORT CLEANUP (unless --keep-ports)
   // ─────────────────────────────────────────────────────────────────
 
-  const report: DestroyReport = {
-    successCount: 0,
-    failureCount: 0,
-    failures: [],
-    warnings: [],
-    remoteBranchesDeletedCount: 0,
-    prsClosedCount: 0,
-    portsReleasedCount: 0,
-  };
+  const shouldAutoKillPorts = !opts.keepPorts && (opts.killPorts || opts.force);
+  if (shouldAutoKillPorts) {
+    console.log(chalk.dim('\n  Checking for stray processes on env ports...'));
+
+    let killedAny = false;
+    for (const svc of config.services) {
+      const svcManifest = manifest.services[svc.name];
+      if (!svcManifest) continue;
+
+      const { port } = svcManifest;
+      const pids = getProcessesOnPort(port);
+
+      if (pids.length > 0) {
+        killedAny = true;
+        for (const pid of pids) {
+          let killResult = tryKillProcess(pid, 'SIGTERM');
+
+          if (killResult.success) {
+            await sleep(500);
+
+            const stillRunning = getProcessesOnPort(port).includes(pid);
+            if (stillRunning) {
+              killResult = tryKillProcess(pid, 'SIGKILL');
+              if (killResult.success) {
+                console.log(chalk.green(`    ✓ Killed stray process on port ${port} (PID ${pid})`));
+                report.portsReleasedCount++;
+              } else {
+                console.log(chalk.yellow(`    ⚠ Failed to kill stray process on port ${port} (PID ${pid})`));
+                report.warnings.push(`Port ${port} still in use by PID ${pid}. Manual kill: kill -9 ${pid}`);
+              }
+            } else {
+              console.log(chalk.green(`    ✓ Terminated stray process on port ${port} (PID ${pid})`));
+              report.portsReleasedCount++;
+            }
+          } else {
+            console.log(chalk.yellow(`    ⚠ Cannot kill process on port ${port}: ${killResult.error}`));
+            report.warnings.push(`Port ${port} still in use by PID ${pid}. Manual kill: kill -9 ${pid}`);
+          }
+        }
+      }
+    }
+
+    if (!killedAny) {
+      console.log(chalk.dim('    (no stray processes found)'));
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // PHASE 4: REMOTE CLEANUP (branches + PRs) — ONLY WITH --cleanup-remote
+  // ─────────────────────────────────────────────────────────────────
 
   if (opts.cleanupRemote) {
     console.log(chalk.dim('\n  Cleaning up remote branches and PRs...'));
@@ -242,60 +294,7 @@ export async function destroyEnv(envName: string, opts: DestroyOptions): Promise
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // PHASE 5: PORT CLEANUP — ONLY WITH --kill-ports
-  // ─────────────────────────────────────────────────────────────────
-
-  if (opts.killPorts) {
-    console.log(chalk.dim('\n  Verifying ports are released...'));
-
-    for (const svc of config.services) {
-      const svcManifest = manifest.services[svc.name];
-      if (!svcManifest) continue;
-
-      const { port } = svcManifest;
-      const pids = getProcessesOnPort(port);
-
-      if (pids.length > 0) {
-        for (const pid of pids) {
-          // Try SIGTERM first (graceful shutdown)
-          let killResult = tryKillProcess(pid, 'SIGTERM');
-
-          if (killResult.success) {
-            console.log(chalk.green(`    ✓ Sent SIGTERM to process on port ${port} (PID ${pid})`));
-
-            // Wait for graceful shutdown
-            await sleep(1000);
-
-            // Check if still running
-            const stillRunning = getProcessesOnPort(port).includes(pid);
-            if (stillRunning && opts.force) {
-              // Force kill only if --force is set
-              killResult = tryKillProcess(pid, 'SIGKILL');
-              if (killResult.success) {
-                console.log(chalk.green(`    ✓ Sent SIGKILL to process on port ${port} (PID ${pid})`));
-                report.portsReleasedCount++;
-              } else {
-                console.log(chalk.yellow(`    ⚠ Failed to kill process on port ${port}: ${killResult.error}`));
-                report.warnings.push(`Port ${port} still in use by PID ${pid}. Manual kill needed: kill -9 ${pid}`);
-              }
-            } else if (!stillRunning) {
-              report.portsReleasedCount++;
-            } else {
-              report.warnings.push(`Port ${port} still in use by PID ${pid}. Use --force to kill aggressively.`);
-            }
-          } else {
-            console.log(chalk.yellow(`    ⚠ Cannot kill process on port ${port}: ${killResult.error}`));
-            report.failures.push({ step: 'kill_port', error: killResult.error ?? '', repo: svc.repo });
-          }
-        }
-      } else {
-        console.log(chalk.dim(`    ○ Port ${port} (${svc.name}): free`));
-      }
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────
-  // PHASE 6: SUMMARY REPORT
+  // PHASE 5: SUMMARY REPORT
   // ─────────────────────────────────────────────────────────────────
 
   console.log(chalk.green(`\n  ✓ Environment '${envName}' destroyed.\n`));
