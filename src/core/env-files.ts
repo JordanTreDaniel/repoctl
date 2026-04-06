@@ -154,12 +154,19 @@ export function setupEnvFile(opts: {
 
 // WHAT: copies all files listed in worktree_copy from base repo into the worktree
 // WHY:  gitignored files like .env.local aren't checked in but services need them
-// EDGE: if the source file doesn't exist, the copy is skipped (not an error)
+// EDGE: if the source file doesn't exist, the copy is skipped (not an error); .gitignore is always included
 export function copyWorktreeFiles(
   baseRepoDir: string,
   worktreeDir: string,
   filesToCopy: string[]
 ): void {
+  // Always copy .gitignore so worktree inherits parent repo's ignores (e.g., dist/)
+  const gitignoreSrc = path.join(baseRepoDir, '.gitignore');
+  const gitignoreDst = path.join(worktreeDir, '.gitignore');
+  if (fs.existsSync(gitignoreSrc)) {
+    fs.copyFileSync(gitignoreSrc, gitignoreDst);
+  }
+
   for (const relPath of filesToCopy) {
     const src = path.join(baseRepoDir, relPath);
     const dst = path.join(worktreeDir, relPath);

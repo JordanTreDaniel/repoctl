@@ -57,18 +57,24 @@ export function addWorktree(
 // WHAT: removes a git worktree and cleans up the worktree metadata + branch
 // WHY:  env destroy must clean up worktrees + branches to avoid git's "already exists" errors on recreate
 // EDGE: uses --force to remove even if there are uncommitted changes — warn the user before calling
-export function removeWorktree(rootDir: string, svcRepo: string, envName: string, svcName: string): void {
+export function removeWorktree(rootDir: string, svcRepo: string, envName: string, svcName: string): { success: boolean; error?: string } {
   const repoDir = path.join(rootDir, svcRepo);
   const wtPath = path.join(repoDir, '.repoctl-worktrees', envName);
 
-  if (!fs.existsSync(wtPath)) return;
+  if (!fs.existsSync(wtPath)) {
+    return { success: true }; // Already gone, treat as success
+  }
 
   try {
     execSync(`git -C "${repoDir}" worktree remove --force "${wtPath}"`, { stdio: 'inherit' });
-  } catch {
+  } catch (err) {
     // fallback: manually remove directory and prune
-    fs.rmSync(wtPath, { recursive: true, force: true });
-    execSync(`git -C "${repoDir}" worktree prune`, { stdio: 'inherit' });
+    try {
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      execSync(`git -C "${repoDir}" worktree prune`, { stdio: 'inherit' });
+    } catch (fallbackErr) {
+      return { success: false, error: (fallbackErr as Error).message };
+    }
   }
 
   // Clean up the associated branch
@@ -78,6 +84,8 @@ export function removeWorktree(rootDir: string, svcRepo: string, envName: string
   } catch {
     // Silently skip if branch doesn't exist or deletion fails
   }
+
+  return { success: true };
 }
 
 // WHAT: creates worktrees for all services in a config simultaneously
@@ -98,15 +106,25 @@ export function addWorktreesForEnv(
 
 // WHAT: removes all service worktrees for an environment
 // WHY:  env destroy must clean up all repos + branches atomically
-// EDGE: silently skips repos where the worktree doesn't exist (partial create scenario)
+// EDGE: silently skips repos where the worktree doesn't exist (partial create scenario); throws if any removal fails
 export function removeWorktreesForEnv(
   rootDir: string,
   config: RepoctlConfig,
   envName: string
-): void {
+): Array<{ service: string; success: boolean; error?: string }> {
+  const results: Array<{ service: string; success: boolean; error?: string }> = [];
   for (const svc of config.services) {
-    removeWorktree(rootDir, svc.repo, envName, svc.name);
+    const result = removeWorktree(rootDir, svc.repo, envName, svc.name);
+    results.push({ service: svc.name, ...result });
   }
+
+  const failures = results.filter((r) => !r.success);
+  if (failures.length > 0) {
+    const msg = failures.map((f) => `${f.service}: ${f.error}`).join('; ');
+    throw new Error(`Worktree removal failed for: ${msg}`);
+  }
+
+  return results;
 }
 
 // WHAT: reads the current HEAD SHA for a worktree

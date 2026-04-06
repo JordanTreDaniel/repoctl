@@ -141,11 +141,16 @@ export async function destroyEnv(envName: string, opts: DestroyOptions): Promise
   // ─────────────────────────────────────────────────────────────────
 
   console.log(chalk.dim('\n  Removing git worktrees...'));
+  let worktreeResults: Array<{ service: string; success: boolean; error?: string }> = [];
   try {
-    removeWorktreesForEnv(rootDir, config, envName);
-    console.log(chalk.dim('    ✓ worktrees removed'));
+    worktreeResults = removeWorktreesForEnv(rootDir, config, envName);
+    const allSucceeded = worktreeResults.every((r) => r.success);
+    if (allSucceeded) {
+      console.log(chalk.dim('    ✓ worktrees removed'));
+    }
   } catch (err) {
-    console.log(chalk.yellow(`  ⚠ Worktree removal error: ${(err as Error).message}`));
+    const errMsg = (err as Error).message;
+    console.log(chalk.yellow(`  ⚠ Worktree removal failed: ${errMsg}`));
   }
 
   console.log(chalk.dim('  Removing symlink wrapper...'));
