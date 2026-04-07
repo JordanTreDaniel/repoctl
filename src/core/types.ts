@@ -30,12 +30,19 @@ export interface DatabaseConfig {
   seed_command?: string;
 }
 
+export interface SourceRewrite {
+  service: string;
+  globs: string[];
+  exclude?: string[];
+}
+
 export interface RepoctlConfig {
   name: string;
   description?: string;
   env_offset: number;
   services: ServiceConfig[];
   port_rewrites?: PortRewrite[];
+  source_rewrites?: SourceRewrite[];
   database?: DatabaseConfig;
   worktree_copy?: string[];
 }

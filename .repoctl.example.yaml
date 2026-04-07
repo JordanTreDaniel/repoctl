@@ -47,6 +47,19 @@ port_rewrites:
     env_var: NEXT_PUBLIC_BACKEND_URL
     template: "http://localhost:{api.port}"
 
+# Source file rewrites — replace hardcoded port numbers in source code
+# Useful when apps reference other services' ports directly in code (not just env vars).
+# Each service's worktree is scanned for OTHER services' base ports and replaced.
+source_rewrites:
+  - service: app
+    globs:
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+    exclude:
+      - "**/*.test.ts"
+      - "**/__tests__/**"
+
 # SQLite database isolation (optional — remove this section if not using SQLite)
 # Each environment gets its own copy of the DB file so they never share state.
 database:

@@ -9,6 +9,7 @@ import { nextEnvIndex, computePortMap, checkPortConflicts, checkIndexCollision }
 import { addWorktreesForEnv, createWrapper } from '../../core/worktrees.js';
 import { setupAllEnvFiles } from '../../core/env-files.js';
 import { copyDatabase, seedDatabase } from '../../core/database.js';
+import { rewriteSourcePorts } from '../../core/source-rewrites.js';
 import type { EnvManifest } from '../../core/types.js';
 
 export interface CreateOptions {
@@ -105,6 +106,20 @@ export async function createEnv(envName: string, opts: CreateOptions): Promise<v
   console.log(chalk.dim('  Creating symlink wrapper...'));
   createWrapper(rootDir, envName, worktreePaths);
   console.log(chalk.dim(`    ✓ .repoctl-worktrees/${envName}/`));
+
+  // Rewrite hardcoded ports in source files
+  const rewriteStats = await rewriteSourcePorts({
+    config,
+    portMap,
+    worktreePaths,
+  });
+  if (rewriteStats.filesModified > 0) {
+    console.log(
+      chalk.dim(
+        `  Patched ${rewriteStats.filesModified} file(s), ${rewriteStats.replacements} port(s)\n`
+      )
+    );
+  }
 
   // Copy database
   let dbFilename: string | undefined;
